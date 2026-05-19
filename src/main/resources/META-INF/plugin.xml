@@ -1,0 +1,33 @@
+<idea-plugin>
+    <id>io.github.atishagrawal.apkwebhook</id>
+    <name>APK Webhook</name>
+    <vendor>Atish Agrawal</vendor>
+    <description><![CDATA[One-click build + upload + Chat-notify for any Android project.]]></description>
+
+    <idea-version since-build="251" until-build="299.*"/>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>Git4Idea</depends>
+    <depends>com.intellij.gradle</depends>
+    <depends>org.jetbrains.android</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <applicationService serviceImplementation="io.github.atishagrawal.apkwebhook.settings.ApkWebhookSettings"/>
+        <applicationConfigurable parentId="tools"
+                                 id="io.github.atishagrawal.apkwebhook.settings"
+                                 displayName="APK Webhook"
+                                 instance="io.github.atishagrawal.apkwebhook.ui.ApkWebhookConfigurable"/>
+        <notificationGroup id="APK Webhook" displayType="BALLOON"/>
+    </extensions>
+
+    <actions>
+        <action id="io.github.atishagrawal.apkwebhook.ShareApk"
+                class="io.github.atishagrawal.apkwebhook.action.ShareApkAction"
+                text="Share APK"
+                description="Build APK, upload to server, post Chat card"
+                icon="AllIcons.Actions.Upload">
+            <add-to-group group-id="MainToolbarRight" anchor="after" relative-to-action="SearchEverywhere"/>
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>
