@@ -4,7 +4,7 @@
 
 A JetBrains plugin (Android Studio / IntelliJ IDEA) that collapses the manual "switch branch → build → find APK → upload somewhere → paste link in chat" workflow into a single toolbar click. Built so QA, Product, and sales teams can get fresh test builds without bothering an engineer.
 
-[![Kotlin](https://img.shields.io/badge/Kotlin-2.2.20-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org/)
+[![Kotlin](https://img.shields.io/badge/Kotlin-2.3.10-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org/)
 [![IntelliJ Platform](https://img.shields.io/badge/IntelliJ_Platform-251%2B-000000?logo=intellij-idea&logoColor=white)](https://plugins.jetbrains.com/docs/intellij/)
 [![Gradle](https://img.shields.io/badge/Gradle-8.13-02303A?logo=gradle&logoColor=white)](https://gradle.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -31,7 +31,9 @@ This plugin collapses all six steps into **one click** without disturbing your w
 - **Build-variant picker** — auto-discovered from the IDE's Gradle sync; falls back to a configured task list if sync data is unavailable.
 - **Live build console** — Gradle stdout/stderr stream into a dedicated "APK Share Build" tool window in real time.
 - **APK upload with progress bar** — chunked OkHttp upload with byte-accurate progress reported to the IDE status bar.
-- **Google Chat notification** — posts a `cardsV2` card with branch, commit, message, JIRA ticket, and filename, plus clickable install + download URLs.
+- **Google Chat notification** — posts a `cardsV2` card with branch, commit, **who shared it**, an optional message, JIRA ticket, and filename, plus clickable install + download URLs.
+- **Editable commit changelog** — the dialog pre-fills a "Changes" field with the commits unique to the selected branch (merge commits excluded, base auto-detected from `origin/HEAD`). Edit it freely before sending; it renders as its own "Changes" section on the card.
+- **Optional multi-line message** — a free-text note (what to test, caveats), separate from the changelog.
 - **JIRA auto-extract** — pulls the parent ticket ID from your branch name (`feature/PROJ-100-proj-99-some-slug` → `PROJ-99`). Manual edits stick.
 - **Secrets stay secret** — your Chat webhook URL lives in IntelliJ's PasswordSafe, not in plain XML.
 
@@ -96,12 +98,15 @@ After install, open **Settings → Tools → APK Webhook**:
 | Uploader | Who's sharing this build (defaults to your OS username) |
 | Environment label | Tagged in upload metadata (e.g. `QA`, `Staging`) |
 | JIRA base URL | Makes ticket IDs clickable in the Chat card |
+| Base branch for changelog | Blank = auto-detect (`origin/HEAD` → develop/main/master). Set e.g. `develop` to pin it |
+| Max commits prefilled | How many commit subjects fill the Changes field before an "…and N more" line (default 10) |
+| Pre-fill Changes from recent commits | Toggle the changelog auto-fill on/off |
 | Chat webhook URL | Stored in PasswordSafe; must start with `https://chat.googleapis.com/v1/spaces/` |
 
 ## Usage
 
 1. Click the **upload icon** in the main toolbar (or **Tools → Share APK**).
-2. Pick a branch, build variant, and write a one-line message.
+2. Pick a branch and build variant. The **Changes** field auto-fills with that branch's commits (edit freely); the **Message** note is optional.
 3. JIRA ticket auto-fills from the branch name; edit if needed.
 4. Click **OK**. Watch the progress in the IDE status bar and the "APK Share Build" tool window.
 5. When done, a notification balloon shows the install URL and a Chat card lands in your configured space.

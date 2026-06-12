@@ -1,7 +1,7 @@
 plugins {
     id("org.jetbrains.intellij.platform") version "2.5.0"
-    kotlin("jvm") version "2.2.20"
-    kotlin("plugin.serialization") version "2.2.20"
+    kotlin("jvm") version "2.3.10"
+    kotlin("plugin.serialization") version "2.3.10"
     id("com.gradleup.shadow") version "8.3.5"
 }
 

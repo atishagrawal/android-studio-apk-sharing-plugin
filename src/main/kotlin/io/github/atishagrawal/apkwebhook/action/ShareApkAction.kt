@@ -117,11 +117,20 @@ class ShareApkAction : AnAction() {
                     val uploadFilename = req.filenameOverride?.takeIf { it.isNotBlank() }
                         ?: "${settings.appName}-$sanitized-$shortSha.apk"
 
-                    val notes = "${req.message} (commit $shortSha)"
+                    // Prefer the repo's git user.name; fall back to the configured uploader.
+                    // Used for both the card "Shared by" row and the upload metadata.
+                    val sharedBy = runCatching { gitService.authorName() }.getOrNull()
+                        ?.takeIf { it.isNotBlank() } ?: settings.uploader
+
+                    val notes = if (req.message.isBlank()) {
+                        "(commit $shortSha)"
+                    } else {
+                        "${req.message} (commit $shortSha)"
+                    }
                     val meta = BuildMeta(
                         branch = req.branch,
                         env = settings.envLabel,
-                        uploader = settings.uploader,
+                        uploader = sharedBy,
                         notes = notes,
                         filename = uploadFilename,
                         jiraTicket = req.jiraTicket?.takeIf { it.isNotBlank() },
@@ -133,7 +142,7 @@ class ShareApkAction : AnAction() {
                     logSystem("✓ Uploaded. Install: ${result.installUrl}")
 
                     indicator.text = "Posting Chat card…"
-                    ChatNotifyService(settings, webhookUrl).notify(req, result, shortSha, uploadFilename)
+                    ChatNotifyService(settings, webhookUrl).notify(req, result, shortSha, uploadFilename, sharedBy)
                     logSystem("✓ Chat card posted.")
 
                     ApplicationManager.getApplication().invokeLater {

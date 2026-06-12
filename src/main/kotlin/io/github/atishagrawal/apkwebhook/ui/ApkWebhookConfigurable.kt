@@ -4,6 +4,7 @@ import io.github.atishagrawal.apkwebhook.settings.ApkWebhookSecrets
 import io.github.atishagrawal.apkwebhook.settings.ApkWebhookSettings
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.ui.ValidationInfo
+import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPasswordField
 import com.intellij.ui.components.JBScrollPane
@@ -37,6 +38,9 @@ class ApkWebhookConfigurable : Configurable {
     private val uploaderField = JBTextField()
     private val envLabelField = JBTextField()
     private val jiraBaseUrlField = JBTextField()
+    private val baseBranchOverrideField = JBTextField()
+    private val commitLogLimitField = JBTextField()
+    private val prefillChangelogCheckbox = JBCheckBox("Pre-fill Changes from recent commits")
     private val chatWebhookUrlField = JBPasswordField()
 
     override fun getDisplayName(): String = "APK Webhook"
@@ -65,6 +69,15 @@ class ApkWebhookConfigurable : Configurable {
             .addLabeledComponent(JBLabel("Environment label:"), envLabelField, 1, false)
             .addLabeledComponent(JBLabel("JIRA base URL:"), jiraBaseUrlField, 1, false)
             .addSeparator()
+            .addLabeledComponent(
+                JBLabel("Base branch for changelog (blank = auto-detect):"),
+                baseBranchOverrideField,
+                1,
+                false,
+            )
+            .addLabeledComponent(JBLabel("Max commits prefilled:"), commitLogLimitField, 1, false)
+            .addComponent(prefillChangelogCheckbox, 0)
+            .addSeparator()
             .addLabeledComponent(JBLabel("Chat webhook URL (PasswordSafe):"), chatWebhookUrlField, 1, false)
             .addComponent(
                 JBLabel("<html><i>Webhook must match https://chat.googleapis.com/v1/spaces/&hellip;</i></html>"),
@@ -91,6 +104,9 @@ class ApkWebhookConfigurable : Configurable {
             uploaderField.text != state.uploader ||
             envLabelField.text != state.envLabel ||
             jiraBaseUrlField.text != state.jiraBaseUrl ||
+            baseBranchOverrideField.text != state.baseBranchOverride ||
+            parseLimit(commitLogLimitField.text) != state.commitLogLimit ||
+            prefillChangelogCheckbox.isSelected != state.prefillChangelogFromCommits ||
             String(chatWebhookUrlField.password) != savedWebhook
     }
 
@@ -107,6 +123,9 @@ class ApkWebhookConfigurable : Configurable {
         state.uploader = uploaderField.text.trim()
         state.envLabel = envLabelField.text.trim()
         state.jiraBaseUrl = jiraBaseUrlField.text.trim()
+        state.baseBranchOverride = baseBranchOverrideField.text.trim()
+        state.commitLogLimit = parseLimit(commitLogLimitField.text)
+        state.prefillChangelogFromCommits = prefillChangelogCheckbox.isSelected
 
         val webhook = String(chatWebhookUrlField.password).trim()
         ApkWebhookSecrets.getInstance().setWebhookUrl(webhook.takeIf { it.isNotEmpty() })
@@ -124,6 +143,9 @@ class ApkWebhookConfigurable : Configurable {
         uploaderField.text = state.uploader
         envLabelField.text = state.envLabel
         jiraBaseUrlField.text = state.jiraBaseUrl
+        baseBranchOverrideField.text = state.baseBranchOverride
+        commitLogLimitField.text = state.commitLogLimit.toString()
+        prefillChangelogCheckbox.isSelected = state.prefillChangelogFromCommits
         // PasswordSafe.get() can be slow; settings dialog already runs on EDT so this is best-effort.
         // TODO(perf): if this blocks noticeably, move to a pooled-thread load + populate via invokeLater.
         chatWebhookUrlField.text = ApkWebhookSecrets.getInstance().getWebhookUrl().orEmpty()
@@ -152,4 +174,6 @@ class ApkWebhookConfigurable : Configurable {
 
     private fun parseTasks(text: String): List<String> =
         text.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
+
+    private fun parseLimit(text: String): Int = text.trim().toIntOrNull()?.coerceIn(1, 50) ?: 10
 }

@@ -27,6 +27,10 @@ class ApkWebhookSettings : PersistentStateComponent<ApkWebhookSettings.State> {
         var uploader: String = System.getProperty("user.name") ?: "unknown",
         var envLabel: String = "",
         var jiraBaseUrl: String = "https://your-org.atlassian.net/browse/",
+        // Commit changelog prefill.
+        var baseBranchOverride: String = "",            // "" = auto-detect origin/HEAD → develop/main/master
+        var commitLogLimit: Int = 10,                    // subjects prefilled before "…and N more"
+        var prefillChangelogFromCommits: Boolean = true, // master switch for the Changes-field prefill
     )
 
     private var state = State()

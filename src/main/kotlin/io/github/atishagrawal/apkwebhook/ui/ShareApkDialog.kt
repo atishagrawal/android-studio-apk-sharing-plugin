@@ -2,41 +2,53 @@ package io.github.atishagrawal.apkwebhook.ui
 
 import io.github.atishagrawal.apkwebhook.model.BranchInfo
 import io.github.atishagrawal.apkwebhook.model.ShareRequest
+import io.github.atishagrawal.apkwebhook.service.CommitLogService
+import io.github.atishagrawal.apkwebhook.service.CommitSummary
 import io.github.atishagrawal.apkwebhook.service.GitService
 import io.github.atishagrawal.apkwebhook.service.GradleVariantService
 import io.github.atishagrawal.apkwebhook.settings.ApkWebhookSettings
 import io.github.atishagrawal.apkwebhook.util.JiraIdExtractor
 import com.intellij.icons.AllIcons
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.ValidationInfo
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBScrollPane
+import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.FormBuilder
 import java.awt.Component
+import java.awt.KeyboardFocusManager
+import java.awt.event.InputEvent
+import java.awt.event.KeyEvent
+import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.DefaultListCellRenderer
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JList
+import javax.swing.KeyStroke
 import javax.swing.SwingConstants
+import javax.swing.event.DocumentEvent
+import javax.swing.event.DocumentListener
+
+private const val CHANGES_PLACEHOLDER = "Commits load here when you pick a branch — edit freely"
 
 /**
- * Dialog driven by [ShareApkAction]. Collects a [ShareRequest] from the user — the heavy
- * lifting (worktree / gradle / upload / chat) happens in the action after `showAndGet()` returns
- * true.
+ * Dialog driven by [ShareApkAction]. Collects a [ShareRequest] from the user.
  *
  * UX decisions:
- *  - Branch picker is a button that opens a [JBPopupFactory] chooser with
- *    [setNamerForFiltering] — same UX as Android Studio's "Git Branches" popup
- *    (filtered list, not highlight-only). Recent branches are prefixed with a star.
- *  - Build-variant combo enumerates `:app:assemble<Variant>` tasks from the IDE's
- *    cached Gradle sync via [GradleVariantService]. Falls back to the static
- *    settings list if the project hasn't been synced.
- *  - Selecting a branch auto-fills the JIRA ticket field IF the user hasn't manually
- *    edited it yet. Manual edits (including manual clears) freeze that field.
- *  - Validation is non-blocking on the JIRA field: a malformed value is a warning, not a block.
+ *  - Branch picker: [JBPopupFactory] chooser with `setNamerForFiltering` (AS-style filtered list).
+ *  - Build-variant combo: enumerated from the IDE's cached Gradle sync via [GradleVariantService].
+ *  - **Message** is an optional, multi-line free-text note (what to test, caveats).
+ *  - **Changes** is a multi-line field pre-filled with the branch's unique commit subjects and
+ *    fully editable; it drives the card's Changes section. The prefill is async (git runs off the
+ *    EDT) and freezes the moment the user edits it — same model as the JIRA field below.
+ *  - Selecting a branch auto-fills the JIRA ticket (until manually edited).
+ *  - Enter inserts a newline in the text areas; Ctrl+Enter submits the dialog.
  */
 class ShareApkDialog(
     private val project: Project,
@@ -45,6 +57,10 @@ class ShareApkDialog(
 ) : DialogWrapper(project, true) {
 
     private val variantService = GradleVariantService(project)
+    private val commitLogService = CommitLogService(project)
+
+    /** Captured once: the branch currently checked out, so prefill can use local HEAD for it. */
+    private val currentBranchName: String? = runCatching { gitService.currentBranchName() }.getOrNull()
 
     private val branchPickerButton = JButton("Pick a branch").apply {
         horizontalAlignment = SwingConstants.LEFT
@@ -53,7 +69,20 @@ class ShareApkDialog(
         addActionListener { openBranchPicker() }
     }
     private val variantCombo = ComboBox<String>()
-    private val messageField = JBTextField()
+    private val messageArea = JBTextArea(3, 50).apply {
+        lineWrap = true
+        wrapStyleWord = true
+        setFocusTraversalKeys(KeyboardFocusManager.FORWARD_TRAVERSAL_KEYS, null)
+        setFocusTraversalKeys(KeyboardFocusManager.BACKWARD_TRAVERSAL_KEYS, null)
+        emptyText.text = "Optional note — what to test, caveats…"
+    }
+    private val changesArea = JBTextArea(6, 50).apply {
+        lineWrap = true
+        wrapStyleWord = true
+        setFocusTraversalKeys(KeyboardFocusManager.FORWARD_TRAVERSAL_KEYS, null)
+        setFocusTraversalKeys(KeyboardFocusManager.BACKWARD_TRAVERSAL_KEYS, null)
+        emptyText.text = CHANGES_PLACEHOLDER
+    }
     private val jiraTicketField = JBTextField().apply {
         emptyText.text = "e.g. PROJ-1234 (optional)"
     }
@@ -67,26 +96,40 @@ class ShareApkDialog(
     /** True while the JIRA field reflects the auto-extracted value (so we can keep auto-filling). */
     private var jiraIsAutoFilled = true
 
+    /** True while the Changes field reflects the auto-prefilled commit list. */
+    private var changelogIsAutoFilled = true
+    private var lastAutoFilledChangelog = ""
+    private val prefillRequestId = AtomicInteger()
+
     init {
         title = "Share APK"
         isResizable = true
         init()
+        listOf(messageArea, changesArea).forEach { area ->
+            area.registerKeyboardAction(
+                { clickDefaultButton() },
+                KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, InputEvent.CTRL_DOWN_MASK),
+                JComponent.WHEN_FOCUSED,
+            )
+        }
+        wireJiraManualEditListener()
+        wireChangesManualEditListener()
         populateBranches()
         populateBuildVariants()
-        wireJiraManualEditListener()
     }
 
     override fun createCenterPanel(): JComponent {
         return FormBuilder.createFormBuilder()
             .addLabeledComponent(JBLabel("Branch:"), branchPickerButton, 1, false)
             .addLabeledComponent(JBLabel("Build variant:"), variantCombo, 1, false)
-            .addLabeledComponent(JBLabel("Message:"), messageField, 1, false)
+            .addLabeledComponent(JBLabel("Message:"), JBScrollPane(messageArea), 1, true)
+            .addLabeledComponent(JBLabel("Changes:"), JBScrollPane(changesArea), 1, true)
             .addLabeledComponent(JBLabel("JIRA ticket:"), jiraTicketField, 1, false)
             .addLabeledComponent(JBLabel("Filename:"), filenameField, 1, false)
             .panel
     }
 
-    override fun getPreferredFocusedComponent(): JComponent = messageField
+    override fun getPreferredFocusedComponent(): JComponent = messageArea
 
     override fun doValidate(): ValidationInfo? {
         val branch = selectedBranch
@@ -97,9 +140,7 @@ class ShareApkDialog(
         if (variant.isBlank()) {
             return ValidationInfo("Pick a build variant", variantCombo)
         }
-        if (messageField.text.isBlank()) {
-            return ValidationInfo("Message is required", messageField)
-        }
+        // Message is optional — no required check.
         val ticket = jiraTicketField.text.trim()
         if (ticket.isNotBlank() && !ticket.matches(Regex("[A-Z][A-Z0-9]+-\\d+"))) {
             // Warning only — does not block submit.
@@ -112,30 +153,22 @@ class ShareApkDialog(
         val branch = selectedBranch
             ?: error("ShareApkDialog.getShareRequest() called with no branch selected")
         val variantOrTask = (variantCombo.selectedItem as? String).orEmpty().trim()
-        // Variants are bare names ("devDebug"); legacy settings entries may be full task paths
-        // (":app:assembleDevDebug"). Detect by the colon prefix and translate when needed so
-        // the build phase always receives a Gradle task path.
         val gradleTask = if (variantOrTask.contains(":")) variantOrTask
         else variantService.variantToTask(variantOrTask)
-        // Return the bare branch name (e.g. "release/1"), NOT the remote ref ("origin/release/1").
-        // Downstream services prepend "origin/" themselves when invoking git so the user-facing
-        // metadata (chat card, BuildMeta) stays clean and git commands stay valid.
         return ShareRequest(
             branch = branch.displayName,
             gradleTask = gradleTask,
-            message = messageField.text.trim(),
+            message = messageArea.text.trim(),
             jiraTicket = jiraTicketField.text.trim().takeIf { it.isNotEmpty() },
             filenameOverride = filenameField.text.trim().takeIf { it.isNotEmpty() },
+            changelogText = changesArea.text,
         )
     }
 
     // --- internals ---------------------------------------------------------
 
     private fun openBranchPicker() {
-        if (branches.isEmpty()) {
-            // Empty list = nothing to pick. Surface the issue via the field's validation.
-            return
-        }
+        if (branches.isEmpty()) return
         val popup = JBPopupFactory.getInstance()
             .createPopupChooserBuilder(branches)
             .setRenderer(BranchInfoRenderer())
@@ -152,9 +185,42 @@ class ShareApkDialog(
         branchPickerButton.text = if (info.isRecent) "★ ${info.displayName}" else info.displayName
         // Auto-fill JIRA from the branch — only if the user hasn't manually edited it yet.
         if (jiraIsAutoFilled) {
-            val extracted = JiraIdExtractor.extract(info.displayName).orEmpty()
-            jiraTicketField.text = extracted
+            jiraTicketField.text = JiraIdExtractor.extract(info.displayName).orEmpty()
             jiraIsAutoFilled = true
+        }
+        prefillChangesFor(info)
+    }
+
+    /**
+     * Loads the branch's unique commit subjects on a pooled thread and drops them into the
+     * Changes field on the EDT — only while the field is still auto-filled and this is the
+     * latest request. Captures the dialog modality first; otherwise the `invokeLater` would be
+     * deferred until the modal dialog closes (default modality is non-modal).
+     */
+    private fun prefillChangesFor(info: BranchInfo) {
+        if (!settings.prefillChangelogFromCommits || !changelogIsAutoFilled) return
+        val id = prefillRequestId.incrementAndGet()
+        val isCurrent = info.displayName == currentBranchName
+        val modality = rootPane?.let { ModalityState.stateForComponent(it) } ?: ModalityState.current()
+        changesArea.emptyText.text = "Loading commits…"
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val summary = runCatching {
+                commitLogService.commitsForShare(info.displayName, isCurrent, settings.commitLogLimit)
+            }.getOrDefault(CommitSummary(emptyList(), 0))
+            ApplicationManager.getApplication().invokeLater({
+                if (id != prefillRequestId.get() || isDisposed) return@invokeLater
+                if (changelogIsAutoFilled) {
+                    val text = buildList {
+                        addAll(summary.subjects)
+                        if (summary.extraCount > 0) add("…and ${summary.extraCount} more")
+                    }.joinToString("\n")
+                    // Set the baseline BEFORE the text so the document listener sees a match and
+                    // keeps `changelogIsAutoFilled == true` for this programmatic fill.
+                    lastAutoFilledChangelog = text
+                    changesArea.text = text
+                }
+                changesArea.emptyText.text = CHANGES_PLACEHOLDER
+            }, modality)
         }
     }
 
@@ -173,7 +239,6 @@ class ShareApkDialog(
         val items: List<String> = if (enumerated.isNotEmpty()) {
             enumerated
         } else {
-            // Fall back to legacy settings list when the project hasn't been Gradle-synced.
             (listOf(settings.defaultGradleTask) + settings.additionalGradleTasks)
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
@@ -182,8 +247,6 @@ class ShareApkDialog(
         variantCombo.removeAllItems()
         items.forEach { variantCombo.addItem(it) }
 
-        // Prefer the variant matching the user's default-task setting if present,
-        // otherwise fall back to "debug", then first item.
         val defaultVariant = settings.defaultGradleTask
             .removePrefix(":app:assemble")
             .replaceFirstChar(Char::lowercase)
@@ -194,18 +257,27 @@ class ShareApkDialog(
     }
 
     private fun wireJiraManualEditListener() {
-        // Any human edit to the ticket field flips off auto-fill mode (so future branch
-        // selections leave the field alone). We detect "auto-fill in progress" by
-        // comparing against the current branch's extraction.
-        jiraTicketField.document.addDocumentListener(object : javax.swing.event.DocumentListener {
+        jiraTicketField.document.addDocumentListener(object : DocumentListener {
             private fun userEdit() {
                 val expected = selectedBranch?.let { JiraIdExtractor.extract(it.displayName) }.orEmpty()
                 jiraIsAutoFilled = jiraTicketField.text == expected
             }
 
-            override fun insertUpdate(e: javax.swing.event.DocumentEvent?) = userEdit()
-            override fun removeUpdate(e: javax.swing.event.DocumentEvent?) = userEdit()
-            override fun changedUpdate(e: javax.swing.event.DocumentEvent?) = userEdit()
+            override fun insertUpdate(e: DocumentEvent?) = userEdit()
+            override fun removeUpdate(e: DocumentEvent?) = userEdit()
+            override fun changedUpdate(e: DocumentEvent?) = userEdit()
+        })
+    }
+
+    private fun wireChangesManualEditListener() {
+        changesArea.document.addDocumentListener(object : DocumentListener {
+            private fun userEdit() {
+                changelogIsAutoFilled = changesArea.text == lastAutoFilledChangelog
+            }
+
+            override fun insertUpdate(e: DocumentEvent?) = userEdit()
+            override fun removeUpdate(e: DocumentEvent?) = userEdit()
+            override fun changedUpdate(e: DocumentEvent?) = userEdit()
         })
     }
 

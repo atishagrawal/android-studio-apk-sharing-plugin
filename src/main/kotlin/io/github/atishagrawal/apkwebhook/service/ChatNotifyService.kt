@@ -17,7 +17,8 @@ import java.util.concurrent.TimeUnit
  *   - top-level `text` → contains the four clickable raw URLs (install, alt-port install,
  *     direct download, builds dashboard). This is the ONLY clickable affordance — Chat
  *     auto-links bare HTTP URLs in `text` and the browser navigates directly.
- *   - `cardsV2` → single section with metadata rows (Branch / Source / Message / Ticket / File).
+ *   - `cardsV2` → metadata section (Branch / Source / Shared by / Message / Ticket / File),
+ *     plus an optional "Changes" section listing the build's commits.
  *
  * A `buttonList` row is intentionally NOT included. Chat rewrites `http://`→`https://`
  * on every card-mediated click (buttonList, decoratedText.onClick, `<a href>` in
@@ -42,12 +43,13 @@ class ChatNotifyService(
         result: UploadResult,
         shortSha: String,
         uploadFilename: String,
+        sharedBy: String,
     ) {
         if (webhookUrl.isBlank()) {
             throw ApkWebhookException.SettingsMissing("Google Chat webhook URL is not configured.")
         }
 
-        val payload = buildPayload(req, result, shortSha, uploadFilename, settings)
+        val payload = buildPayload(req, result, shortSha, uploadFilename, sharedBy, settings)
         val json = mapToJson(payload)
 
         val request = Request.Builder()
@@ -85,6 +87,7 @@ internal fun buildPayload(
     result: UploadResult,
     shortSha: String,
     uploadFilename: String,
+    sharedBy: String,
     settings: ApkWebhookSettings.State,
 ): Map<String, Any> {
     val install = result.installUrl
@@ -111,15 +114,43 @@ internal fun buildPayload(
         add("*All Builds:* $builds")
     }
 
+    // Section 1 — metadata. Order: Branch, Source, Shared by, [Message?], [Ticket?], File.
+    // Message and Ticket rows appear only when non-blank. All free text is HTML-escaped because
+    // card text is an HTML subset; newlines become <br>.
     val sectionWidgets = buildList<Map<String, Any>> {
-        add(decoratedText("Branch", "$branch @ $shortSha"))
+        add(decoratedText("Branch", "${escapeHtml(branch)} @ $shortSha"))
         add(decoratedText("Source", "IDE Plugin (APK Webhook)"))
-        add(decoratedText("Message", req.message))
+        add(decoratedText("Shared by", escapeHtml(sharedBy), startIcon = "PERSON"))
+        if (req.message.isNotBlank()) {
+            add(decoratedText("Message", escapeHtml(req.message).replace("\n", "<br>"), wrapText = true))
+        }
         if (!req.jiraTicket.isNullOrBlank()) {
             val href = "${settings.jiraBaseUrl}${req.jiraTicket}"
-            add(decoratedText("Ticket", "<a href=\"$href\">${req.jiraTicket}</a>"))
+            add(decoratedText("Ticket", "<a href=\"$href\">${escapeHtml(req.jiraTicket)}</a>"))
         }
-        add(decoratedText("File", uploadFilename))
+        add(decoratedText("File", escapeHtml(uploadFilename)))
+    }
+
+    // Section 2 — Changes. Built from the user's edited Changes field: one line per entry,
+    // blanks dropped, each escaped, joined with <br>. Omitted entirely when nothing remains.
+    val changeLines = req.changelogText.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
+
+    val sections = buildList<Map<String, Any>> {
+        add(mapOf("widgets" to sectionWidgets))
+        if (changeLines.isNotEmpty()) {
+            add(
+                mapOf(
+                    "header" to "Changes",
+                    "widgets" to listOf(
+                        mapOf(
+                            "textParagraph" to mapOf(
+                                "text" to changeLines.joinToString("<br>") { escapeHtml(it) },
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        }
     }
 
     return mapOf(
@@ -132,21 +163,35 @@ internal fun buildPayload(
                         "title" to "Build Succeeded!",
                         "subtitle" to settings.appName,
                     ),
-                    "sections" to listOf(
-                        mapOf("widgets" to sectionWidgets),
-                    ),
+                    "sections" to sections,
                 ),
             ),
         ),
     )
 }
 
-private fun decoratedText(label: String, text: String): Map<String, Any> = mapOf(
-    "decoratedText" to mapOf(
-        "topLabel" to label,
-        "text" to text,
-    ),
-)
+private fun decoratedText(
+    label: String,
+    text: String,
+    startIcon: String? = null,
+    wrapText: Boolean = false,
+): Map<String, Any> {
+    val decorated = buildMap {
+        put("topLabel", label)
+        put("text", text)
+        if (startIcon != null) put("startIcon", mapOf("knownIcon" to startIcon))
+        if (wrapText) put("wrapText", true)
+    }
+    return mapOf("decoratedText" to decorated)
+}
+
+/**
+ * Escapes the HTML-significant characters in card text. Card `text` fields render as an HTML
+ * subset, so raw `&`/`<`/`>` in a commit subject, message, or filename would corrupt the card.
+ * `&` is escaped first so the `<`/`>` replacements aren't double-escaped.
+ */
+internal fun escapeHtml(s: String): String =
+    s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 /**
  * Minimal recursive serializer for the heterogeneous payload — handles
@@ -202,7 +247,7 @@ private fun appendString(sb: StringBuilder, s: String) {
             '\r' -> sb.append("\\r")
             '\t' -> sb.append("\\t")
             '\b' -> sb.append("\\b")
-            '\u000C' -> sb.append("\\f")
+            '' -> sb.append("\\f")
             else -> {
                 if (ch.code < 0x20) {
                     sb.append("\\u").append("%04x".format(ch.code))

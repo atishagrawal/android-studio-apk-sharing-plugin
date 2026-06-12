@@ -4,6 +4,17 @@
     <vendor>Atish Agrawal</vendor>
     <description><![CDATA[One-click build + upload + Chat-notify for any Android project.]]></description>
 
+    <change-notes><![CDATA[
+        <b>0.3.0</b>
+        <ul>
+            <li>New editable <b>Changes</b> field, pre-filled with the commits unique to the selected branch (merge commits excluded).</li>
+            <li><b>Shared by</b> row on the Chat card — git user.name, falling back to the Uploader setting.</li>
+            <li><b>Message</b> is now an optional, multi-line note.</li>
+            <li>Dedicated <b>Changes</b> section on the Chat card.</li>
+            <li>Card text is HTML-escaped (fixes rendering for commit subjects containing &lt; or &amp;).</li>
+        </ul>
+    ]]></change-notes>
+
     <idea-version since-build="251" until-build="299.*"/>
 
     <depends>com.intellij.modules.platform</depends>

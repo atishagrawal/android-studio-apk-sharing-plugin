@@ -3,6 +3,7 @@ package io.github.atishagrawal.apkwebhook.service
 import io.github.atishagrawal.apkwebhook.model.BranchInfo
 import io.github.atishagrawal.apkwebhook.model.WorktreeHandle
 import com.intellij.openapi.project.Project
+import git4idea.GitUserRegistry
 import git4idea.config.GitVcsSettings
 import git4idea.repo.GitRepositoryManager
 import java.nio.file.Path
@@ -72,6 +73,15 @@ class GitService(private val project: Project) {
     fun currentBranchName(): String? {
         val repo = GitRepositoryManager.getInstance(project).repositories.firstOrNull() ?: return null
         return repo.currentBranch?.name
+    }
+
+    /**
+     * The repo's configured git `user.name`, or null if unset/unavailable.
+     * Reads git config synchronously via [GitUserRegistry] — call from a background thread.
+     */
+    fun authorName(): String? {
+        val repo = GitRepositoryManager.getInstance(project).repositories.firstOrNull() ?: return null
+        return GitUserRegistry.getInstance(project).getOrReadUser(repo.root)?.name
     }
 
     /**
